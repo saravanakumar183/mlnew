@@ -1,2 +1,6 @@
 streamlit
-pandas
+tensorflow
+keras
+Pillow
+numpy
+matplotlib
