@@ -1,151 +1,67 @@
+
 import streamlit as st
-import pandas as pd
-import math
-from pathlib import Path
+import numpy as np
+import tensorflow as tf
+from tensorflow import keras
+from tensorflow.keras.preprocessing import image
 
-# Set the title and favicon that appear in the Browser's tab bar.
-st.set_page_config(
-    page_title='GDP dashboard',
-    page_icon=':earth_americas:', # This is an emoji shortcode. Could be a URL too.
-)
+# Load the trained model
+model_path = 'new_train.keras'
+model = tf.keras.models.load_model(model_path)
 
-# -----------------------------------------------------------------------------
-# Declare some useful functions.
+# Function to load and preprocess the image
+def load_and_preprocess_image(img, target_size=(224, 224)):
+    img_array = image.img_to_array(img) / 255.0  # Normalize the image
+    img_array = np.expand_dims(img_array, axis=0)  # Add batch dimension
+    return img_array
 
-@st.cache_data
-def get_gdp_data():
-    """Grab GDP data from a CSV file.
+# Function to load class labels
+def load_class_labels(label_file_path):
+    with open(label_file_path, 'r') as file:
+        class_labels = file.readlines()
+    class_labels = [label.strip() for label in class_labels]  # Remove whitespace
+    return class_labels
 
-    This uses caching to avoid having to read the file every time. If we were
-    reading from an HTTP endpoint instead of a file, it's a good idea to set
-    a maximum age to the cache with the TTL argument: @st.cache_data(ttl='1d')
-    """
+# Load class labels
+class_labels_path = 'class_labels.txt'
+class_labels = load_class_labels(class_labels_path)
 
-    # Instead of a CSV on disk, you could read from an HTTP endpoint here too.
-    DATA_FILENAME = Path(__file__).parent/'data/gdp_data.csv'
-    raw_gdp_df = pd.read_csv(DATA_FILENAME)
+# Streamlit app layout
+st.title("Plant Species Classification")
+st.write("Upload an image of a plant or take a photo to get its species prediction.")
 
-    MIN_YEAR = 1960
-    MAX_YEAR = 2022
+# Option to take a photo or upload an image
+camera_input = st.camera_input("Take a photo")
+uploaded_file = st.file_uploader("Or upload an image...", type=["jpg", "jpeg", "png"])
 
-    # The data above has columns like:
-    # - Country Name
-    # - Country Code
-    # - [Stuff I don't care about]
-    # - GDP for 1960
-    # - GDP for 1961
-    # - GDP for 1962
-    # - ...
-    # - GDP for 2022
-    #
-    # ...but I want this instead:
-    # - Country Name
-    # - Country Code
-    # - Year
-    # - GDP
-    #
-    # So let's pivot all those year-columns into two: Year and GDP
-    gdp_df = raw_gdp_df.melt(
-        ['Country Code'],
-        [str(x) for x in range(MIN_YEAR, MAX_YEAR + 1)],
-        'Year',
-        'GDP',
-    )
+if camera_input is not None:
+    # If the user takes a photo
+    img = image.load_img(camera_input, target_size=(224, 224))
+    img_array = load_and_preprocess_image(img)
 
-    # Convert years from string to integers
-    gdp_df['Year'] = pd.to_numeric(gdp_df['Year'])
+    # Make predictions
+    predictions = model.predict(img_array)
+    predicted_class_index = np.argmax(predictions, axis=1)
 
-    return gdp_df
+    # Get the predicted class name
+    predicted_class_name = class_labels[predicted_class_index[0]]
 
-gdp_df = get_gdp_data()
+    # Display the captured image and prediction
+    st.image(img, caption='Captured Image', use_column_width=True)
+    st.write(f'Predicted Class: {predicted_class_name}')  # Display predicted class name
 
-# -----------------------------------------------------------------------------
-# Draw the actual page
+elif uploaded_file is not None:
+    # If the user uploads an image
+    img = image.load_img(uploaded_file, target_size=(224, 224))
+    img_array = load_and_preprocess_image(img)
 
-# Set the title that appears at the top of the page.
-'''
-# :earth_americas: GDP dashboard
+    # Make predictions
+    predictions = model.predict(img_array)
+    predicted_class_index = np.argmax(predictions, axis=1)
 
-Browse GDP data from the [World Bank Open Data](https://data.worldbank.org/) website. As you'll
-notice, the data only goes to 2022 right now, and datapoints for certain years are often missing.
-But it's otherwise a great (and did I mention _free_?) source of data.
-'''
+    # Get the predicted class name
+    predicted_class_name = class_labels[predicted_class_index[0]]
 
-# Add some spacing
-''
-''
-
-min_value = gdp_df['Year'].min()
-max_value = gdp_df['Year'].max()
-
-from_year, to_year = st.slider(
-    'Which years are you interested in?',
-    min_value=min_value,
-    max_value=max_value,
-    value=[min_value, max_value])
-
-countries = gdp_df['Country Code'].unique()
-
-if not len(countries):
-    st.warning("Select at least one country")
-
-selected_countries = st.multiselect(
-    'Which countries would you like to view?',
-    countries,
-    ['DEU', 'FRA', 'GBR', 'BRA', 'MEX', 'JPN'])
-
-''
-''
-''
-
-# Filter the data
-filtered_gdp_df = gdp_df[
-    (gdp_df['Country Code'].isin(selected_countries))
-    & (gdp_df['Year'] <= to_year)
-    & (from_year <= gdp_df['Year'])
-]
-
-st.header('GDP over time', divider='gray')
-
-''
-
-st.line_chart(
-    filtered_gdp_df,
-    x='Year',
-    y='GDP',
-    color='Country Code',
-)
-
-''
-''
-
-
-first_year = gdp_df[gdp_df['Year'] == from_year]
-last_year = gdp_df[gdp_df['Year'] == to_year]
-
-st.header(f'GDP in {to_year}', divider='gray')
-
-''
-
-cols = st.columns(4)
-
-for i, country in enumerate(selected_countries):
-    col = cols[i % len(cols)]
-
-    with col:
-        first_gdp = first_year[first_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
-        last_gdp = last_year[last_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
-
-        if math.isnan(first_gdp):
-            growth = 'n/a'
-            delta_color = 'off'
-        else:
-            growth = f'{last_gdp / first_gdp:,.2f}x'
-            delta_color = 'normal'
-
-        st.metric(
-            label=f'{country} GDP',
-            value=f'{last_gdp:,.0f}B',
-            delta=growth,
-            delta_color=delta_color
-        )
+    # Display the uploaded image and prediction
+    st.image(img, caption='Uploaded Image', use_column_width=True)
+    st.write(f'Predicted Class: {predicted_class_name}')  # Display predicted class name
